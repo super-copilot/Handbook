@@ -1,0 +1,166 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins-ns
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jenkins-pv
+  namespace: jenkins-ns
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+  - ReadWriteMany
+  persistentVolumeReclaimPolicy: Delete
+  nfs:
+    server: 192.168.11.10
+    path: /data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-pvc
+  namespace: jenkins-ns
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    k8s-app: jenkins
+  name: jenkins-svca
+  namespace: jenkins-ns
+---
+kind: Service
+apiVersion: v1
+metadata:
+  labels:
+    k8s-app: jenkins
+  name: jenkins-svc
+  namespace: jenkins-ns
+spec:
+  type: NodePort
+  ports:
+    - name: master
+      port: 6808
+      targetPort: 6808
+      nodePort: 6808
+    - name: slave
+      port: 6809
+      targetPort: 6809
+      nodePort: 6809
+  selector:
+    k8s-app: jenkins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+ name: jenkins
+ namespace: jenkins-ns
+rules:
+ - apiGroups: [""]
+   resources: ["pods","configmaps","namespaces"]
+   verbs: ["create","delete","get","list","patch","update","watch"]
+ - apiGroups: [""]
+   resources: ["pods/exec"]
+   verbs: ["create","delete","get","list","patch","update","watch"]
+ - apiGroups: [""]
+   resources: ["pods/log"]
+   verbs: ["get","list","watch"]
+ - apiGroups: [""]
+   resources: ["secrets"]
+   verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+ name: jenkins
+ namespace: jenkins-ns
+roleRef:
+ apiGroup: rbac.authorization.k8s.io
+ kind: Role
+ name: jenkins
+subjects:
+ - kind: ServiceAccount
+   name: jenkins-svca
+   namespace: jenkins-ns
+   
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    k8s-app: jenkins
+  name: jenkins-master
+  namespace: jenkins-ns
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      k8s-app: jenkins
+  template:
+    metadata:
+      labels:
+        k8s-app: jenkins
+      namespace: jenkins-ns
+      name: jenkins-master
+    spec:
+      containers:
+        - name: jenkins-master
+          image: jenkins/jenkins:2.286
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6808
+              name: master
+              protocol: TCP
+            - containerPort: 6809
+              name: agent
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+            requests:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: 6808
+            initialDelaySeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: 6808
+            initialDelaySeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: jenkins-home
+              mountPath: /var/lib/jenkins
+          env:
+            - name: JENKINS_HOME
+              value: /var/lib/jenkins
+            - name: JENKINS_OPTS 
+              value: --httpPort=6808
+            - name: JENKINS_SLAVE_AGENT_PORT
+              value: "6809"
+      volumes:
+      - name: jenkins-home
+        persistentVolumeClaim:
+          claimName: jenkins-pvc
+      serviceAccountName: jenkins-svca
+
